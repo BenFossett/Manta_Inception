@@ -19,9 +19,12 @@ from __future__ import print_function
 
 import argparse
 import sys
+import os.path
 
 import numpy as np
 import tensorflow as tf
+
+from tensorflow.python.platform import gfile
 
 def load_graph(model_file):
   graph = tf.Graph()
@@ -68,6 +71,7 @@ def load_labels(label_file):
 
 if __name__ == "__main__":
   file_name = "tensorflow/examples/label_image/data/grace_hopper.jpg"
+  folder_name = ""
   model_file = \
     "tensorflow/examples/label_image/data/inception_v3_2016_08_28_frozen.pb"
   label_file = "tensorflow/examples/label_image/data/imagenet_slim_labels.txt"
@@ -80,6 +84,7 @@ if __name__ == "__main__":
 
   parser = argparse.ArgumentParser()
   parser.add_argument("--image", help="image to be processed")
+  parser.add_argument("--vote", type=bool, help="vote over all images in folder")
   parser.add_argument("--graph", help="graph/model to be executed")
   parser.add_argument("--labels", help="name of file containing labels")
   parser.add_argument("--input_height", type=int, help="input height")
@@ -88,12 +93,18 @@ if __name__ == "__main__":
   parser.add_argument("--input_std", type=int, help="input std")
   parser.add_argument("--input_layer", help="name of input layer")
   parser.add_argument("--output_layer", help="name of output layer")
+  parser.add_argument("--top_k_graph", type=bool, help="produce top-k graph")
   args = parser.parse_args()
 
   if args.graph:
     model_file = args.graph
+  if args.vote:
+    folder_name = "/mnt/storage/scratch/tc13007/mantas_test_augmented"
   if args.image:
-    file_name = args.image
+    if args.vote:
+      file_name = folder_name + "/" + args.image
+    else:
+      file_name = args.image
   if args.labels:
     label_file = args.labels
   if args.input_height:
@@ -108,25 +119,75 @@ if __name__ == "__main__":
     input_layer = args.input_layer
   if args.output_layer:
     output_layer = args.output_layer
+  if args.top_k_graph:
+    folder_name = "/mnt/storage/scratch/tc13007/mantas_test"
+    file_name = folder_name
 
   graph = load_graph(model_file)
-  t = read_tensor_from_image_file(file_name,
-                                  input_height=input_height,
-                                  input_width=input_width,
-                                  input_mean=input_mean,
-                                  input_std=input_std)
-
   input_name = "import/" + input_layer
   output_name = "import/" + output_layer
   input_operation = graph.get_operation_by_name(input_name);
   output_operation = graph.get_operation_by_name(output_name);
 
-  with tf.Session(graph=graph) as sess:
-    results = sess.run(output_operation.outputs[0],
-                      {input_operation.outputs[0]: t})
-  results = np.squeeze(results)
+  if args.vote:
+    if args.top_k_graph:
+      for i in range(1, 99):
+        final_results = np.array([])
+        final_results = np.reshape(final_results, [-1, 99])
+        extensions = ['jpg', 'jpeg', 'JPG', 'JPEG']
+        file_list = []
+    else:
+      final_results = np.array([])
+      final_results = np.reshape(final_results, [-1, 99])
+      extensions = ['jpg', 'jpeg', 'JPG', 'JPEG']
+      file_list = []
+      if not gfile.Exists(file_name):
+        tf.logging.error("Image directory '" + file_name + "' not found.")
+      for extension in extensions:
+        file_glob = os.path.join(file_name, '*.' + extension)
+        file_list.extend(gfile.Glob(file_glob))
 
-  top_k = results.argsort()[-5:][::-1]
-  labels = load_labels(label_file)
-  for i in top_k:
-    print(labels[i], results[i])
+      #print(file_list)
+
+      for file in file_list:
+        t = read_tensor_from_image_file(file,
+                                        input_height=input_height,
+                                        input_width=input_width,
+                                        input_mean=input_mean,
+                                        input_std=input_std)
+
+        with tf.Session(graph=graph) as sess:
+          results = sess.run(output_operation.outputs[0],
+                             {input_operation.outputs[0]: t})
+        #print("results {}".format(results.shape))
+        #results = np.squeeze(results)
+        #print("results {}".format(results.shape))
+        final_results = np.append(final_results, results, axis=0)
+        #print("final results {}".format(final_results.shape))
+
+      #print(final_results.shape)
+      #print(final_results)
+      results = np.sum(final_results, axis=0)
+      #print(results.shape)
+      top_k = results.argsort()[-10:][::-1]
+      labels = load_labels(label_file)
+      for i in top_k:
+        print(labels[i], results[i])
+  else:
+    t = read_tensor_from_image_file(file_name,
+                                    input_height=input_height,
+                                    input_width=input_width,
+                                    input_mean=input_mean,
+                                    input_std=input_std)
+
+
+    with tf.Session(graph=graph) as sess:
+      results = sess.run(output_operation.outputs[0],
+                        {input_operation.outputs[0]: t})
+    results = np.squeeze(results)
+
+    top_k = results.argsort()[-10:][::-1]
+    labels = load_labels(label_file)
+    for i in top_k:
+      print(labels[i], results[i])
+
