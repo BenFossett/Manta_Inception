@@ -139,19 +139,12 @@ if __name__ == "__main__":
     input_operation = graph.get_operation_by_name(input_name)
     output_operation = graph.get_operation_by_name(output_name)
 
-    # print(model_file.split('/')[6])
-    # print(model_file.split('/')[6].split('_output')[0])
-    # print(args.summaries_dir)
 
     if args.top_k_graph:
 
         with tf.Session(graph=graph) as sess:
 
-            predictions = tf.placeholder(tf.float32)
-            ground_truth = tf.placeholder(tf.float32)
-            correct_prediction = tf.equal(predictions, ground_truth)
-            accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32), name='accuracy')
-            show = ground_truth
+            accuracy = tf.placeholder(tf.float32)
             top_k_summary = tf.summary.scalar('Top_K', accuracy)
             top_k_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_top_k'.format(
                 model=model_file.split('/')[6].split('_output')[0]),
@@ -159,10 +152,12 @@ if __name__ == "__main__":
 
             extensions = ['jpg', 'jpeg', 'JPG', 'JPEG']
             file_list = []
-            #predictions = []
+            sess.run(tf.global_variables_initializer())
             for k in range(1, 100):
                 prediction = 0
                 evaluated_images = 0
+                final_results = np.array([])
+                final_results = np.reshape(final_results, [-1, 99])
                 for i in range(0, 99):
                     truth = i
                     file_name = folder_name + '/' + str(i)
@@ -182,26 +177,20 @@ if __name__ == "__main__":
                         results = sess.run(output_operation.outputs[0],
                                            {input_operation.outputs[0]: t})
                         results = np.squeeze(results)
+                        final_results = np.append(final_results, results, axis=0)
                         top_k = results.argsort()[-k:][::-1]
                         labels = load_labels(label_file)
-                        #print('truth ' + str(truth))
-                        #print('label ' + labels[0])
+
                         for j in top_k:
-                            accuracy_str = sess.run(top_k_summary, {predictions: int(labels[i]), ground_truth: truth})
-                            # print(show)
-                            # print(predictions)
-                            # print(ground_truth)
-                            # print(accuracy)
+                            #accuracy_str = sess.run(top_k_summary, {predictions: labels[i], ground_truth: truth})
                             if int(labels[j]) == truth:
-                                #print('{}, {}'.format(k, i))
                                 prediction += 1
                     file_list = []
+                #print(accuracy_str)
+                accuracy_str = sess.run(top_k_summary, {accuracy: prediction / evaluated_images})
                 top_k_writer.add_summary(accuracy_str, k)
                 top_k_writer.flush()
-                #predictions[k] = prediction/evaluated_images
                 print('top {} is {} correct'.format(k, prediction / evaluated_images))
-            # plt.plot(predictions)
-            # plt.savefig('{}_top_k.png'.format(model_file.split('/')[6].split('_output')[0]))
 
     elif args.vote:
         final_results = np.array([])
