@@ -197,6 +197,7 @@ if __name__ == "__main__":
 
     elif args.vote:
         if args.top_k_graph:
+            print('got here')
             with tf.Session(graph=graph) as sess:
 
                 accuracy = tf.placeholder(tf.float32)
@@ -213,21 +214,22 @@ if __name__ == "__main__":
                 #final_results = np.reshape(final_results, [-1, 99])
 
                 ground_truth = np.array([], dtype=int)
-                print(folder_name)
-                for i in range(0, 1):
+                #print(folder_name)
+                for i in range(0, 99):
                     truth = i
                     for j in range(0, 2):
                         this_results = np.array([])
                         this_results = np.reshape(this_results, [-1, 99])
                         ground_truth = np.append(ground_truth, truth)
+                        evaluated_images += 1
                         file_name = folder_name + "/" + str(i) + "/" + str(j)
+                        print(file_name)
                         if not gfile.Exists(file_name):
                             tf.logging.error("Image directory '" + file_name + "' not found.")
                         for extension in extensions:
                             file_glob = os.path.join(file_name, '*.' + extension)
                             file_list.extend(gfile.Glob(file_glob))
                         for file in file_list:
-                            evaluated_images += 1
                             t = read_tensor_from_image_file(file,
                                                             input_height=input_height,
                                                             input_width=input_width,
@@ -238,7 +240,8 @@ if __name__ == "__main__":
                                                {input_operation.outputs[0]: t})
                             this_results = np.append(this_results, results, axis=0)
                         results = np.sum(this_results, axis=0)
-
+                        #print(results.shape)
+                        #print(final_results.shape)
                         final_results = np.append(final_results, results, axis=0)
                         file_list = []
                 for k in range(1, 100):

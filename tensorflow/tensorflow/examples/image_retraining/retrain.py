@@ -1182,6 +1182,12 @@ def main(_):
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument(
+    '--twin',
+    type=bool,
+    default=False,
+    help='train a semi siamese/twin network'
+  )
+  parser.add_argument(
       '--image_dir',
       type=str,
       default='',
