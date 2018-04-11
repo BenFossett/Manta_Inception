@@ -17,15 +17,18 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import time
 import argparse
 import sys
 import os.path
-
+import glob
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
 from tensorflow.python.platform import gfile
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.90)
 
 
 def load_graph(model_file):
@@ -45,16 +48,7 @@ def read_tensor_from_image_file(file_name, input_height=299, input_width=299,
     input_name = "file_reader"
     output_name = "normalized"
     file_reader = tf.read_file(file_name, input_name)
-    if file_name.endswith(".png"):
-        image_reader = tf.image.decode_png(file_reader, channels=3,
-                                           name='png_reader')
-    elif file_name.endswith(".gif"):
-        image_reader = tf.squeeze(tf.image.decode_gif(file_reader,
-                                                      name='gif_reader'))
-    elif file_name.endswith(".bmp"):
-        image_reader = tf.image.decode_bmp(file_reader, name='bmp_reader')
-    else:
-        image_reader = tf.image.decode_jpeg(file_reader, channels=3,
+    image_reader = tf.image.decode_jpeg(file_reader, channels=3,
                                             name='jpeg_reader')
     float_caster = tf.cast(image_reader, tf.float32)
     dims_expander = tf.expand_dims(float_caster, 0);
@@ -110,8 +104,6 @@ if __name__ == "__main__":
         model_file = args.graph
     if args.vote:
         folder_name = "/mnt/storage/scratch/tc13007/mantas_test_augmented"
-        # if args.top_k_graph:
-        #     folder_name = folder_name + "/"
     if args.image:
         if args.vote:
             file_name = folder_name + "/" + args.image
@@ -140,46 +132,73 @@ if __name__ == "__main__":
     input_operation = graph.get_operation_by_name(input_name)
     output_operation = graph.get_operation_by_name(output_name)
 
-    if args.top_k_graph and not args.vote:
+    def get_file_list(file_name):
+        file_list = glob.glob("{}/*".format(file_name))
+        return file_list
 
-        with tf.Session(graph=graph) as sess:
+    def predict_top_k():
+        with tf.Session(graph=graph, config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+
+            evaluated_images = 0
+            final_results = np.empty((0,99))
+            ground_truth = np.array([], dtype=int)
+
+            if args.vote:
+                for i in range(0, 3):
+                    start = time.time()
+                    print(i)
+                    truth = i
+                    for j in range(0, 2):
+
+                        this_results = np.zeros(99)
+                        ground_truth = np.append(ground_truth, truth)
+                        evaluated_images += 1
+
+                        file_name = folder_name + "/" + str(i) + "/" + str(j)
+                        file_list = get_file_list(file_name)
+                        for file in file_list:
+                            t = read_tensor_from_image_file(file,
+                                                            input_height=input_height,
+                                                            input_width=input_width,
+                                                            input_mean=input_mean,
+                                                            input_std=input_std)
+
+                            results = sess.run(output_operation.outputs[0],
+                                                   {input_operation.outputs[0]: t})
+                            results = np.squeeze(results)
+                            this_results = np.add(this_results, results)
+
+                        final_results = np.append(final_results, this_results, axis=0)
+                    print('time: {}'.format(time.time()-start))
+            else:
+                for i in range(0, 99):
+                    truth = i
+                    file_name = folder_name + '/' + str(i)
+                    file_list = get_file_list(file_name)
+
+                    for file in file_list:
+                        ground_truth = np.append(ground_truth, truth)
+                        evaluated_images += 1
+                        t = read_tensor_from_image_file(file,
+                                                        input_height=input_height,
+                                                        input_width=input_width,
+                                                        input_mean=input_mean,
+                                                        input_std=input_std)
+
+                        results = sess.run(output_operation.outputs[0],
+                                           {input_operation.outputs[0]: t})
+                        final_results = np.append(final_results, results, axis=0)
+        return final_results, ground_truth, evaluated_images
+
+    def top_k_graph(final_results, ground_truth, evaluated_images):
+        with tf.Session(graph=graph, config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
 
             accuracy = tf.placeholder(tf.float32)
             top_k_summary = tf.summary.scalar('Top_K', accuracy)
             top_k_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_top_k'.format(
                 model=model_file.split('/')[6].split('_output')[0]),
                                                  sess.graph)
-
-            extensions = ['jpg', 'jpeg', 'JPG', 'JPEG']
-            file_list = []
             sess.run(tf.global_variables_initializer())
-            evaluated_images = 0
-            final_results = np.array([])
-            final_results = np.reshape(final_results, [-1, 99])
-            ground_truth = np.array([], dtype=int)
-            #print(final_results.shape)
-            for i in range(0, 99):
-
-                truth = i
-                file_name = folder_name + '/' + str(i)
-                if not gfile.Exists(file_name):
-                    tf.logging.error("Image directory '" + file_name + "' not found.")
-                for extension in extensions:
-                    file_glob = os.path.join(file_name, '*.' + extension)
-                    file_list.extend(gfile.Glob(file_glob))
-                for file in file_list:
-                    ground_truth = np.append(ground_truth, truth)
-                    evaluated_images += 1
-                    t = read_tensor_from_image_file(file,
-                                                    input_height=input_height,
-                                                    input_width=input_width,
-                                                    input_mean=input_mean,
-                                                    input_std=input_std)
-
-                    results = sess.run(output_operation.outputs[0],
-                                       {input_operation.outputs[0]: t})
-                    final_results = np.append(final_results, results, axis=0)
-                file_list = []
             for k in range(1, 100):
 
                 labels = load_labels(label_file)
@@ -195,83 +214,22 @@ if __name__ == "__main__":
                 top_k_writer.flush()
                 print('top {} is {}% correct from {} images'.format(k, (prediction / evaluated_images)*100, evaluated_images))
 
+
+    if args.top_k_graph and (not args.vote):
+        print('calculating top_k results for {}'.format(model_file))
+        final_results, ground_truth, evaluated_images = predict_top_k()
+        top_k_graph(final_results, ground_truth, evaluated_images)
+
     elif args.vote:
         if args.top_k_graph:
-            print('got here')
-            with tf.Session(graph=graph) as sess:
-
-                accuracy = tf.placeholder(tf.float32)
-                top_k_summary = tf.summary.scalar('Top_K_with_Votes', accuracy)
-                top_k_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_top_k_vote'.format(
-                    model=model_file.split('/')[6].split('_output')[0]),
-                                                     sess.graph)
-
-                extensions = ['jpg', 'jpeg', 'JPG', 'JPEG']
-                file_list = []
-                sess.run(tf.global_variables_initializer())
-                evaluated_images = 0
-                final_results = np.array([])
-                #final_results = np.reshape(final_results, [-1, 99])
-
-                ground_truth = np.array([], dtype=int)
-                #print(folder_name)
-                for i in range(0, 99):
-                    truth = i
-                    for j in range(0, 2):
-                        this_results = np.array([])
-                        this_results = np.reshape(this_results, [-1, 99])
-                        ground_truth = np.append(ground_truth, truth)
-                        evaluated_images += 1
-                        file_name = folder_name + "/" + str(i) + "/" + str(j)
-                        print(file_name)
-                        if not gfile.Exists(file_name):
-                            tf.logging.error("Image directory '" + file_name + "' not found.")
-                        for extension in extensions:
-                            file_glob = os.path.join(file_name, '*.' + extension)
-                            file_list.extend(gfile.Glob(file_glob))
-                        for file in file_list:
-                            t = read_tensor_from_image_file(file,
-                                                            input_height=input_height,
-                                                            input_width=input_width,
-                                                            input_mean=input_mean,
-                                                            input_std=input_std)
-
-                            results = sess.run(output_operation.outputs[0],
-                                               {input_operation.outputs[0]: t})
-                            this_results = np.append(this_results, results, axis=0)
-                        results = np.sum(this_results, axis=0)
-                        #print(results.shape)
-                        #print(final_results.shape)
-                        final_results = np.append(final_results, results, axis=0)
-                        file_list = []
-                for k in range(1, 100):
-
-                    labels = load_labels(label_file)
-                    prediction = 0
-                    for results, truth in zip(final_results, ground_truth):
-                        results = np.squeeze(results)
-                        top_k = results.argsort()[-k:][::-1]
-                        for j in top_k:
-                            if int(labels[j]) == truth:
-                                prediction += 1
-                    accuracy_str = sess.run(top_k_summary, {accuracy: prediction / evaluated_images})
-                    top_k_writer.add_summary(accuracy_str, k)
-                    top_k_writer.flush()
-                    print('top {} is {}% correct from {} images'.format(k, (prediction / evaluated_images) * 100,
-                                                                        evaluated_images))
+            print('calculating top_k results with votes for {}'.format(model_file))
+            final_results, ground_truth, evaluated_images = predict_top_k()
+            top_k_graph(final_results, ground_truth, evaluated_images)
 
         else:
 
-            final_results = np.array([])
-            final_results = np.reshape(final_results, [-1, 99])
-            extensions = ['jpg', 'jpeg', 'JPG', 'JPEG']
-            file_list = []
-            if not gfile.Exists(file_name):
-                tf.logging.error("Image directory '" + file_name + "' not found.")
-            for extension in extensions:
-                file_glob = os.path.join(file_name, '*.' + extension)
-                file_list.extend(gfile.Glob(file_glob))
-
+            file_list = get_file_list(file_name)
+            final_results = np.zeros(99)
             for file in file_list:
                 t = read_tensor_from_image_file(file,
                                                 input_height=input_height,
@@ -282,14 +240,13 @@ if __name__ == "__main__":
                 with tf.Session(graph=graph) as sess:
                     results = sess.run(output_operation.outputs[0],
                                        {input_operation.outputs[0]: t})
+                results = np.squeeze(results)
+                final_results = np.add(final_results, results)
 
-                final_results = np.append(final_results, results, axis=0)
-            results = np.sum(final_results, axis=0)
-
-            top_k = results.argsort()[-10:][::-1]
+            top_k = final_results.argsort()[-10:][::-1]
             labels = load_labels(label_file)
             for i in top_k:
-                print(labels[i], results[i])
+                print(labels[i], final_results[i])
     else:
         t = read_tensor_from_image_file(file_name,
                                         input_height=input_height,
