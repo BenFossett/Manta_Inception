@@ -84,6 +84,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", help="image to be processed")
     parser.add_argument("--vote", type=bool, help="vote over all images in folder")
+    parser.add_argument("--top", type=bool)
     parser.add_argument("--graph", help="graph/model to be executed")
     parser.add_argument("--labels", help="name of file containing labels")
     parser.add_argument("--input_height", type=int, help="input height")
@@ -144,7 +145,7 @@ if __name__ == "__main__":
             ground_truth = np.array([], dtype=int)
 
             if args.vote:
-                for i in range(0, 3):
+                for i in range(0, 99):
                     start = time.time()
                     print(i)
                     truth = i
@@ -167,13 +168,16 @@ if __name__ == "__main__":
                                                    {input_operation.outputs[0]: t})
                             results = np.squeeze(results)
                             this_results = np.add(this_results, results)
-
-                        final_results = np.append(final_results, this_results, axis=0)
+                        #print(this_results.shape)
+                        final_results = np.append(final_results, [this_results], axis=0)
+                        #print(final_results.shape)
                     print('time: {}'.format(time.time()-start))
             else:
+                print('got hereee')
                 for i in range(0, 99):
                     truth = i
                     file_name = folder_name + '/' + str(i)
+                    #print(file_name)
                     file_list = get_file_list(file_name)
 
                     for file in file_list:
@@ -195,7 +199,12 @@ if __name__ == "__main__":
 
             accuracy = tf.placeholder(tf.float32)
             top_k_summary = tf.summary.scalar('Top_K', accuracy)
-            top_k_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_top_k'.format(
+            if args.vote:
+                top_k_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_top_k_vote'.format(
+                    model=model_file.split('/')[6].split('_output')[0]),
+                                                     sess.graph)
+            else:
+                top_k_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_top_k'.format(
                 model=model_file.split('/')[6].split('_output')[0]),
                                                  sess.graph)
             sess.run(tf.global_variables_initializer())
@@ -227,9 +236,9 @@ if __name__ == "__main__":
             top_k_graph(final_results, ground_truth, evaluated_images)
 
         else:
-
             file_list = get_file_list(file_name)
             final_results = np.zeros(99)
+            top = 0
             for file in file_list:
                 t = read_tensor_from_image_file(file,
                                                 input_height=input_height,
@@ -241,12 +250,22 @@ if __name__ == "__main__":
                     results = sess.run(output_operation.outputs[0],
                                        {input_operation.outputs[0]: t})
                 results = np.squeeze(results)
-                final_results = np.add(final_results, results)
 
-            top_k = final_results.argsort()[-10:][::-1]
+                if args.top:
+                    if np.amax(results) > top:
+                        top = np.amax(results)
+                        top_k = np.argmax(results)
+                        print(top_k)
+                else:
+                    final_results = np.add(final_results, results)
+
             labels = load_labels(label_file)
-            for i in top_k:
-                print(labels[i], final_results[i])
+            if not args.top:
+                top_k = final_results.argsort()[-10:][::-1]
+                for i in top_k:
+                    print(labels[i], final_results[i])
+            else:
+                print(labels[top_k], top)
     else:
         t = read_tensor_from_image_file(file_name,
                                         input_height=input_height,
