@@ -24,6 +24,8 @@ import os.path
 import glob
 import numpy as np
 import tensorflow as tf
+import gc
+
 import matplotlib.pyplot as plt
 
 from tensorflow.python.platform import gfile
@@ -94,6 +96,7 @@ if __name__ == "__main__":
     parser.add_argument("--input_layer", help="name of input layer")
     parser.add_argument("--output_layer", help="name of output layer")
     parser.add_argument("--top_k_graph", type=bool, help="produce top-k graph")
+    parser.add_argument("--histogram", type=bool, help="produce prediction histogram")
     parser.add_argument('--summaries_dir',
                         type=str,
                         default='/mnt/storage/home/tc13007/Manta_Inception/tensorflow/retrain_logs',
@@ -172,8 +175,8 @@ if __name__ == "__main__":
                         final_results = np.append(final_results, [this_results], axis=0)
                         #print(final_results.shape)
                     print('time: {}'.format(time.time()-start))
+                    gc.collect()
             else:
-                print('got hereee')
                 for i in range(0, 99):
                     truth = i
                     file_name = folder_name + '/' + str(i)
@@ -223,18 +226,33 @@ if __name__ == "__main__":
                 top_k_writer.flush()
                 print('top {} is {}% correct from {} images'.format(k, (prediction / evaluated_images)*100, evaluated_images))
 
+    def histogram(final_results):
+        with tf.Session(graph=graph, config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+            predictions = tf.placeholder(tf.float32)
+            histogram_summary = tf.summary.histogram('Predictions {]'.format(args.image), predictions)
+            histogram_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_{im}_hist'.format(
+                model=model_file.split('/')[6].split('_output')[0], im=args.image),
+                                                 sess.graph)
+            sess.run(tf.global_variables_initializer())
+
+            for i in range(0,99):
+                prediction_str = sess.run(histogram_summary, {predictions: final_results[i]})
+                histogram_writer.add_summary(prediction_str, i)
+            histogram_writer.flush()
+
+        pass
 
     if args.top_k_graph and (not args.vote):
         print('calculating top_k results for {}'.format(model_file))
         final_results, ground_truth, evaluated_images = predict_top_k()
         top_k_graph(final_results, ground_truth, evaluated_images)
-
+    elif args.histogram and (not args.vote):
+        print('Set vote to true to produce histogram')
     elif args.vote:
         if args.top_k_graph:
             print('calculating top_k results with votes for {}'.format(model_file))
             final_results, ground_truth, evaluated_images = predict_top_k()
             top_k_graph(final_results, ground_truth, evaluated_images)
-
         else:
             file_list = get_file_list(file_name)
             final_results = np.zeros(99)
@@ -250,20 +268,27 @@ if __name__ == "__main__":
                     results = sess.run(output_operation.outputs[0],
                                        {input_operation.outputs[0]: t})
                 results = np.squeeze(results)
-
+                #print(np.argmax(results))
                 if args.top:
                     if np.amax(results) > top:
                         top = np.amax(results)
                         top_k = np.argmax(results)
                         print(top_k)
+                elif args.histogram:
+                    final_results[np.argmax(results)] += 1
                 else:
                     final_results = np.add(final_results, results)
 
             labels = load_labels(label_file)
             if not args.top:
-                top_k = final_results.argsort()[-10:][::-1]
-                for i in top_k:
-                    print(labels[i], final_results[i])
+                if args.histogram:
+                    print('calculating predictoin histogram for image {} with {}'.format(args.image, model_file))
+                    print(final_results)
+                    histogram(final_results)
+                else:
+                    top_k = final_results.argsort()[-10:][::-1]
+                    for i in top_k:
+                        print(labels[i], final_results[i])
             else:
                 print(labels[top_k], top)
     else:
