@@ -85,7 +85,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", help="image to be processed")
-    parser.add_argument("--vote", type=bool, help="vote over all images in folder")
+    parser.add_argument("--vote", type=bool, help="vote over all images in augmented folder")
+    parser.add_argument("--dive_vote", type=bool, help="vote over 2 images in test folder")
     parser.add_argument("--top", type=bool)
     parser.add_argument("--graph", help="graph/model to be executed")
     parser.add_argument("--labels", help="name of file containing labels")
@@ -113,6 +114,9 @@ if __name__ == "__main__":
             file_name = folder_name + "/" + args.image
         else:
             file_name = args.image
+    if args.dive_vote:
+        folder_name = "/mnt/storage/scratch/tc13007/mantas_test"
+        file_name = folder_name + "/" + args.image
     if args.labels:
         label_file = args.labels
     if args.input_height:
@@ -141,51 +145,26 @@ if __name__ == "__main__":
         return file_list
 
     def predict_top_k():
-        with tf.Session(graph=graph, config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+        sess = tf.Session(graph=graph)
 
-            evaluated_images = 0
-            final_results = np.empty((0,99))
-            ground_truth = np.array([], dtype=int)
+        evaluated_images = 0
+        final_results = np.empty((0,99))
+        ground_truth = np.array([], dtype=int)
 
-            if args.vote:
-                for i in range(0, 99):
-                    start = time.time()
-                    print(i)
-                    truth = i
-                    for j in range(0, 2):
+        if args.vote:
+            for i in range(0, 99):
+                start = time.time()
+                print(i)
+                truth = i
+                for j in range(0, 2):
 
-                        this_results = np.zeros(99)
-                        ground_truth = np.append(ground_truth, truth)
-                        evaluated_images += 1
+                    this_results = np.zeros(99)
+                    ground_truth = np.append(ground_truth, truth)
+                    evaluated_images += 1
 
-                        file_name = folder_name + "/" + str(i) + "/" + str(j)
-                        file_list = get_file_list(file_name)
-                        for file in file_list:
-                            t = read_tensor_from_image_file(file,
-                                                            input_height=input_height,
-                                                            input_width=input_width,
-                                                            input_mean=input_mean,
-                                                            input_std=input_std)
-
-                            results = sess.run(output_operation.outputs[0],
-                                                   {input_operation.outputs[0]: t})
-                            results = np.squeeze(results)
-                            this_results = np.add(this_results, results)
-                        #print(this_results.shape)
-                        final_results = np.append(final_results, [this_results], axis=0)
-                        #print(final_results.shape)
-                    print('time: {}'.format(time.time()-start))
-                    gc.collect()
-            else:
-                for i in range(0, 99):
-                    truth = i
-                    file_name = folder_name + '/' + str(i)
-                    #print(file_name)
+                    file_name = folder_name + "/" + str(i) + "/" + str(j)
                     file_list = get_file_list(file_name)
-
                     for file in file_list:
-                        ground_truth = np.append(ground_truth, truth)
-                        evaluated_images += 1
                         t = read_tensor_from_image_file(file,
                                                         input_height=input_height,
                                                         input_width=input_width,
@@ -194,7 +173,28 @@ if __name__ == "__main__":
 
                         results = sess.run(output_operation.outputs[0],
                                            {input_operation.outputs[0]: t})
-                        final_results = np.append(final_results, results, axis=0)
+                        results = np.squeeze(results)
+                        this_results = np.add(this_results, results)
+                    final_results = np.append(final_results, [this_results], axis=0)
+                print('time: {}'.format(time.time()-start))
+        else:
+            for i in range(0, 99):
+                truth = i
+                file_name = folder_name + '/' + str(i)
+                file_list = get_file_list(file_name)
+
+                for file in file_list:
+                    ground_truth = np.append(ground_truth, truth)
+                    evaluated_images += 1
+                    t = read_tensor_from_image_file(file,
+                                                    input_height=input_height,
+                                                    input_width=input_width,
+                                                    input_mean=input_mean,
+                                                    input_std=input_std)
+
+                    results = sess.run(output_operation.outputs[0],
+                                       {input_operation.outputs[0]: t})
+                    final_results = np.append(final_results, results, axis=0)
         return final_results, ground_truth, evaluated_images
 
     def top_k_graph(final_results, ground_truth, evaluated_images):
@@ -228,17 +228,17 @@ if __name__ == "__main__":
 
     def histogram(final_results):
         with tf.Session(graph=graph, config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+            labels = load_labels(label_file)
+            print('Prediction = {}'.format(labels[np.argmax(final_results)]))
             predictions = tf.placeholder(tf.float32)
-            histogram_summary = tf.summary.histogram('Predictions {]'.format(args.image), predictions)
+            histogram_summary = tf.summary.histogram('Predictions_{}'.format(args.image), predictions)
             histogram_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_{im}_hist'.format(
                 model=model_file.split('/')[6].split('_output')[0], im=args.image),
-                                                 sess.graph)
-            sess.run(tf.global_variables_initializer())
-
+                                                     sess.graph)
             for i in range(0,99):
-                prediction_str = sess.run(histogram_summary, {predictions: final_results[i]})
-                histogram_writer.add_summary(prediction_str, i)
-            histogram_writer.flush()
+                prediction_str = sess.run(histogram_summary, {predictions: final_results[i] / 52})
+                histogram_writer.add_summary(prediction_str, labels[i])
+                histogram_writer.flush()
 
         pass
 
@@ -248,7 +248,27 @@ if __name__ == "__main__":
         top_k_graph(final_results, ground_truth, evaluated_images)
     elif args.histogram and (not args.vote):
         print('Set vote to true to produce histogram')
+    elif args.dive_vote:
+        file_list = get_file_list(file_name)
+        labels = load_labels(label_file)
+        final_results = np.zeros(99)
+        for file in file_list:
+            t = read_tensor_from_image_file(file,
+                                            input_height=input_height,
+                                            input_width=input_width,
+                                            input_mean=input_mean,
+                                            input_std=input_std)
+
+            with tf.Session(graph=graph) as sess:
+                results = sess.run(output_operation.outputs[0],
+                                   {input_operation.outputs[0]: t})
+            results = np.squeeze(results)
+            final_results = np.add(final_results, results)
+        top_k = final_results.argsort()[-10:][::-1]
+        for i in top_k:
+            print(labels[i], final_results[i])
     elif args.vote:
+        labels = load_labels(label_file)
         if args.top_k_graph:
             print('calculating top_k results with votes for {}'.format(model_file))
             final_results, ground_truth, evaluated_images = predict_top_k()
@@ -268,29 +288,27 @@ if __name__ == "__main__":
                     results = sess.run(output_operation.outputs[0],
                                        {input_operation.outputs[0]: t})
                 results = np.squeeze(results)
-                #print(np.argmax(results))
                 if args.top:
                     if np.amax(results) > top:
                         top = np.amax(results)
                         top_k = np.argmax(results)
-                        print(top_k)
+                        top_file = file
+                        print("Classified as {} with image {}".format(labels[top_k], top_file))
                 elif args.histogram:
                     final_results[np.argmax(results)] += 1
                 else:
                     final_results = np.add(final_results, results)
 
-            labels = load_labels(label_file)
             if not args.top:
                 if args.histogram:
                     print('calculating predictoin histogram for image {} with {}'.format(args.image, model_file))
-                    print(final_results)
                     histogram(final_results)
                 else:
                     top_k = final_results.argsort()[-10:][::-1]
                     for i in top_k:
                         print(labels[i], final_results[i])
             else:
-                print(labels[top_k], top)
+                print(labels[top_k], top, top_file)
     else:
         t = read_tensor_from_image_file(file_name,
                                         input_height=input_height,
