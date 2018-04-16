@@ -29,7 +29,7 @@ import gc
 import matplotlib.pyplot as plt
 
 from tensorflow.python.platform import gfile
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+#os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.90)
 
 
@@ -116,7 +116,10 @@ if __name__ == "__main__":
             file_name = args.image
     if args.dive_vote:
         folder_name = "/mnt/storage/scratch/tc13007/mantas_test"
-        file_name = folder_name + "/" + args.image
+        if args.top_k_graph:
+            file_name = folder_name
+        else:
+            file_name = folder_name + "/" + args.image
     if args.labels:
         label_file = args.labels
     if args.input_height:
@@ -206,6 +209,10 @@ if __name__ == "__main__":
                 top_k_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_top_k_vote'.format(
                     model=model_file.split('/')[6].split('_output')[0]),
                                                      sess.graph)
+            elif args.dive_vote:
+                top_k_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_dive_vote'.format(
+                    model=model_file.split('/')[6].split('_output')[0]),
+                                                     sess.graph)
             else:
                 top_k_writer = tf.summary.FileWriter(args.summaries_dir + '/{model}_top_k'.format(
                 model=model_file.split('/')[6].split('_output')[0]),
@@ -242,17 +249,11 @@ if __name__ == "__main__":
 
         pass
 
-    if args.top_k_graph and (not args.vote):
-        print('calculating top_k results for {}'.format(model_file))
-        final_results, ground_truth, evaluated_images = predict_top_k()
-        top_k_graph(final_results, ground_truth, evaluated_images)
-    elif args.histogram and (not args.vote):
-        print('Set vote to true to produce histogram')
-    elif args.dive_vote:
-        file_list = get_file_list(file_name)
-        labels = load_labels(label_file)
+    def vote(folder):
+        file_list = get_file_list(folder)
         final_results = np.zeros(99)
         for file in file_list:
+            #print(file)
             t = read_tensor_from_image_file(file,
                                             input_height=input_height,
                                             input_width=input_width,
@@ -264,9 +265,30 @@ if __name__ == "__main__":
                                    {input_operation.outputs[0]: t})
             results = np.squeeze(results)
             final_results = np.add(final_results, results)
-        top_k = final_results.argsort()[-10:][::-1]
-        for i in top_k:
-            print(labels[i], final_results[i])
+        return  final_results
+
+    if args.top_k_graph and (not args.vote) and (not args.dive_vote):
+        print('calculating top_k results for {}'.format(model_file))
+        final_results, ground_truth, evaluated_images = predict_top_k()
+        top_k_graph(final_results, ground_truth, evaluated_images)
+    elif args.histogram and (not args.vote):
+        print('Set vote to true to produce histogram')
+    elif args.dive_vote:
+        if args.top_k_graph:
+            print('calculating top_k dive results for {}'.format(model_file))
+            ground_truth = np.array([], dtype=int)
+            final_results = np.empty((0, 99))
+            for i in range(0, 99):
+                ground_truth = np.append(ground_truth, i)
+                results = vote(file_name + "/" + str(i))
+                final_results = np.append(final_results, [results], axis=0)
+            top_k_graph(final_results, ground_truth, 99)
+        else:
+            final_results = vote(file_name)
+            top_k = final_results.argsort()[-10:][::-1]
+            labels = load_labels(label_file)
+            for i in top_k:
+                print(labels[i], final_results[i])
     elif args.vote:
         labels = load_labels(label_file)
         if args.top_k_graph:

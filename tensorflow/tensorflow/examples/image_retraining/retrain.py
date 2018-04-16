@@ -1075,11 +1075,11 @@ def main(_):
 
     # Merge all the summaries and write them out to the summaries_dir
     merged = tf.summary.merge_all()
-    train_writer = tf.summary.FileWriter(FLAGS.summaries_dir + '/{lr}_{ep}_aug_train'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps),
+    train_writer = tf.summary.FileWriter(FLAGS.summaries_dir + '/{lr}_{ep}_train'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps),
                                          sess.graph)
 
     validation_writer = tf.summary.FileWriter(
-        FLAGS.summaries_dir + '/{lr}_{ep}_aug_validation'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps))
+        FLAGS.summaries_dir + '/{lr}_{ep}_validation'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps))
 
     # Set up all our weights to their initial default values.
     init = tf.global_variables_initializer()
@@ -1174,8 +1174,8 @@ def main(_):
 
     # Write out the trained graph and labels with the weights stored as
     # constants.
-    save_graph_to_file(sess, graph, FLAGS.output_graph + '{lr}_{ep}_aug_output_graph.pb'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps))
-    with gfile.FastGFile(FLAGS.output_labels + '{lr}_{ep}_aug_output_labels.txt'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps), 'w') as f:
+    save_graph_to_file(sess, graph, FLAGS.output_graph + '{lr}_{ep}_output_graph.pb'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps))
+    with gfile.FastGFile(FLAGS.output_labels + '{lr}_{ep}_output_labels.txt'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps), 'w') as f:
       f.write('\n'.join(image_lists.keys()) + '\n')
 
 
@@ -1196,7 +1196,7 @@ if __name__ == '__main__':
   parser.add_argument(
     '--image_dir_test',
     type=str,
-    default='/mnt/storage/scratch/tc13007/mantas_test_2',
+    default='/mnt/storage/scratch/tc13007/mantas_test',
     help='Path to folders of labeled images.'
   )
   parser.add_argument(
