@@ -793,11 +793,23 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
     The tensors for the training and cross entropy results, and tensors for the
     bottleneck input and ground truth input.
   """
+
   with tf.name_scope('input'):
-    bottleneck_input = tf.placeholder_with_default(
-        bottleneck_tensor,
-        shape=[None, bottleneck_tensor_size],
-        name='BottleneckInputPlaceholder')
+    if FLAGS.twin:
+      bottleneck_input_r = tf.placeholder_with_default(
+          bottleneck_tensor,
+          shape=[None, bottleneck_tensor_size],
+          name='BottleneckInputPlaceholder')
+      bottleneck_input_l = tf.placeholder_with_default(
+          bottleneck_tensor,
+          shape=[None, bottleneck_tensor_size],
+          name='BottleneckInputPlaceholder')
+      class_count = 1
+    else:
+      bottleneck_input = tf.placeholder_with_default(
+          bottleneck_tensor,
+          shape=[None, bottleneck_tensor_size],
+          name='BottleneckInputPlaceholder')
 
     ground_truth_input = tf.placeholder(tf.float32,
                                         [None, class_count],
@@ -811,14 +823,24 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
       initial_value = tf.truncated_normal(
           [bottleneck_tensor_size, class_count], stddev=0.001)
 
-      layer_weights = tf.Variable(initial_value, name='final_weights')
+      if FLAGS.twin:
+        with tf.variable_scope('final_weights'):
+          layer_weights_l = tf.Variable(initial_value)
+        with tf.variable_scope('final_weights', reuse=True):
+          layer_weights_r = tf.Variable(initial_value)
+      else:
+        layer_weights = tf.Variable(initial_value, name='final_weights')
 
       variable_summaries(layer_weights)
     with tf.name_scope('biases'):
       layer_biases = tf.Variable(tf.zeros([class_count]), name='final_biases')
       variable_summaries(layer_biases)
     with tf.name_scope('Wx_plus_b'):
-      logits = tf.matmul(bottleneck_input, layer_weights) + layer_biases
+      if FLAGS.twin:
+        logits_left  = tf.matmul(bottleneck_input_l, layer_weights_l) + layer_biases
+        logits_right = tf.matmul(bottleneck_input_r, layer_weights_r) + layer_biases
+      else:
+        logits = tf.matmul(bottleneck_input, layer_weights) + layer_biases
       tf.summary.histogram('pre_activations', logits)
 
   final_tensor = tf.nn.softmax(logits, name=final_tensor_name)
@@ -835,8 +857,12 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
     optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
     train_step = optimizer.minimize(cross_entropy_mean)
 
-  return (train_step, cross_entropy_mean, bottleneck_input, ground_truth_input,
-          final_tensor)
+  if FLAGS.twin:
+    return (train_step, cross_entropy_mean, bottleneck_input_l, bottleneck_input_r, ground_truth_input,
+            final_tensor)
+  else:
+    return (train_step, cross_entropy_mean, bottleneck_input, ground_truth_input,
+            final_tensor)
 
 
 def add_evaluation_step(result_tensor, ground_truth_tensor):
@@ -1064,10 +1090,16 @@ def main(_):
                         bottleneck_tensor, FLAGS.architecture)
 
     # Add the new layer that we'll be training.
-    (train_step, cross_entropy, bottleneck_input, ground_truth_input,
-     final_tensor) = add_final_training_ops(
-         len(image_lists.keys()), FLAGS.final_tensor_name, bottleneck_tensor,
-         model_info['bottleneck_tensor_size'])
+    if FLAGS.twin:
+      (train_step, cross_entropy, bottleneck_input_l, bottleneck_input_r,  ground_truth_input,
+       final_tensor) = add_final_training_ops(
+        len(image_lists.keys()), FLAGS.final_tensor_name, bottleneck_tensor,
+        model_info['bottleneck_tensor_size'])
+    else:
+      (train_step, cross_entropy, bottleneck_input, ground_truth_input,
+       final_tensor) = add_final_training_ops(
+           len(image_lists.keys()), FLAGS.final_tensor_name, bottleneck_tensor,
+           model_info['bottleneck_tensor_size'])
 
     # Create the operations we need to evaluate the accuracy of our new layer.
     evaluation_step, prediction = add_evaluation_step(
@@ -1095,6 +1127,28 @@ def main(_):
              sess, image_lists, FLAGS.train_batch_size, 'training',
              FLAGS.image_dir, FLAGS.image_dir_test, distorted_jpeg_data_tensor,
              distorted_image_tensor, resized_image_tensor, bottleneck_tensor)
+
+      elif FLAGS.twin:
+        tf.logging.info("You are attempting to use a siamese network")
+        (train_bottlenecks_l,
+         train_ground_truths_l, _) = get_random_cached_bottlenecks(
+          sess, image_lists, FLAGS.train_batch_size, 'training',
+          FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
+          decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
+          FLAGS.architecture)
+        (train_bottlenecks_r,
+         train_ground_truths_r, _) = get_random_cached_bottlenecks(
+          sess, image_lists, FLAGS.train_batch_size, 'training',
+          FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
+          decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
+          FLAGS.architecture)
+        train_ground_truth = []
+        for train_ground_truth_l, train_ground_truth_r in zip(train_ground_truths_l, train_ground_truths_r):
+            if tf.equal(tf.argmax(train_ground_truth_l, 1), tf.argmax(train_ground_truth_r)):
+              train_ground_truth.append(1.0)
+            else:
+              train_ground_truth.append(0.0)
+        tf.logging.info("label size {}".format(train_ground_truth.shape))
       else:
         (train_bottlenecks,
          train_ground_truth, _) = get_random_cached_bottlenecks(
@@ -1104,7 +1158,13 @@ def main(_):
              FLAGS.architecture)
       # Feed the bottlenecks and ground truth into the graph, and run a training
       # step. Capture training summaries for TensorBoard with the `merged` op.
-      train_summary, _ = sess.run(
+      if FLAGS.twin:
+        train_summary, _ = sess.run(
+          [merged, train_step],
+          feed_dict={bottleneck_input_l: train_bottlenecks_l, bottleneck_input_r: train_bottlenecks_r,
+                     ground_truth_input: train_ground_truth})
+      else:
+        train_summary, _ = sess.run(
           [merged, train_step],
           feed_dict={bottleneck_input: train_bottlenecks,
                      ground_truth_input: train_ground_truth})
