@@ -771,6 +771,13 @@ def variable_summaries(var):
     tf.summary.histogram('histogram', var)
 
 
+def contrastive_loss(model1, model2, label, margin):
+	with tf.name_scope("contrastive-loss"):
+	  d = tf.sqrt(tf.reduce_sum(tf.pow(model1-model2, 2), 1, keep_dims=True))
+	  tmp= label * tf.square(d)
+	  tmp2 = (1 - label) * tf.square(tf.maximum((margin - d),0))
+	  return tf.reduce_mean(tmp + tmp2) /2
+
 def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
                            bottleneck_tensor_size):
   """Adds a new softmax and fully-connected layer for training.
@@ -830,25 +837,46 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
           layer_weights_r = tf.Variable(initial_value)
       else:
         layer_weights = tf.Variable(initial_value, name='final_weights')
+        variable_summaries(layer_weights)
 
-      variable_summaries(layer_weights)
     with tf.name_scope('biases'):
       layer_biases = tf.Variable(tf.zeros([class_count]), name='final_biases')
       variable_summaries(layer_biases)
     with tf.name_scope('Wx_plus_b'):
       if FLAGS.twin:
-        logits_left  = tf.matmul(bottleneck_input_l, layer_weights_l) + layer_biases
+        logits_left = tf.matmul(bottleneck_input_l, layer_weights_l) + layer_biases
         logits_right = tf.matmul(bottleneck_input_r, layer_weights_r) + layer_biases
+        logits = tf.concat([logits_left, logits_right], 1)
       else:
         logits = tf.matmul(bottleneck_input, layer_weights) + layer_biases
       tf.summary.histogram('pre_activations', logits)
-
+  #2 fully connected layers go before the softmax
+  if FLAGS.twin:
+    logits = tf.layers.dense(
+            inputs=logits,
+            units=class_count,
+            kernel_initializer=tf.random_uniform_initializer(-0.05, 0.05),
+            kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=1e-4),
+            activation=tf.nn.relu)
+    logits = tf.layers.dense(
+            inputs=logits,
+            units=class_count,
+            kernel_initializer=tf.random_uniform_initializer(-0.05, 0.05),
+            kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=1e-4),
+            activation=None)
+    logits = tf.reduce_mean(logits, 1)
+    logits = tf.reshape(logits, [-1, 1])
   final_tensor = tf.nn.softmax(logits, name=final_tensor_name)
   tf.summary.histogram('activations', final_tensor)
 
   with tf.name_scope('cross_entropy'):
-    cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
-        labels=ground_truth_input, logits=logits)
+    if FLAGS.twin:
+      tmp = ground_truth_input * tf.square(logits)
+      tmp2 = (1 - ground_truth_input) * tf.square(tf.maximum((1 - logits), 0))
+      cross_entropy = tf.reduce_sum(tmp + tmp2) / FLAGS.train_batch_size / 2
+    else:
+      cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
+          labels=ground_truth_input, logits=logits)
     with tf.name_scope('total'):
       cross_entropy_mean = tf.reduce_mean(cross_entropy)
   tf.summary.scalar('cross_entropy', cross_entropy_mean)
@@ -878,9 +906,13 @@ def add_evaluation_step(result_tensor, ground_truth_tensor):
   """
   with tf.name_scope('accuracy'):
     with tf.name_scope('correct_prediction'):
-      prediction = tf.argmax(result_tensor, 1)
-      correct_prediction = tf.equal(
-          prediction, tf.argmax(ground_truth_tensor, 1))
+      if FLAGS.twin:
+        prediction = result_tensor#tf.reduce_mean(result_tensor, 1)#tf.metrics.mean(result_tensor[0], result_tensor[1])
+        correct_prediction = tf.equal(prediction, ground_truth_tensor)
+      else:
+        prediction = tf.argmax(result_tensor, 1)
+        correct_prediction = tf.equal(
+            prediction, tf.argmax(ground_truth_tensor, 1))
     with tf.name_scope('accuracy'):
       evaluation_step = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
   tf.summary.scalar('accuracy', evaluation_step)
@@ -1107,11 +1139,11 @@ def main(_):
 
     # Merge all the summaries and write them out to the summaries_dir
     merged = tf.summary.merge_all()
-    train_writer = tf.summary.FileWriter(FLAGS.summaries_dir + '/{lr}_{ep}_train'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps),
+    train_writer = tf.summary.FileWriter(FLAGS.summaries_dir + '/twin_{lr}_{ep}_train'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps),
                                          sess.graph)
 
     validation_writer = tf.summary.FileWriter(
-        FLAGS.summaries_dir + '/{lr}_{ep}_validation'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps))
+        FLAGS.summaries_dir + '/twin_{lr}_{ep}_validation'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps))
 
     # Set up all our weights to their initial default values.
     init = tf.global_variables_initializer()
@@ -1128,8 +1160,8 @@ def main(_):
              FLAGS.image_dir, FLAGS.image_dir_test, distorted_jpeg_data_tensor,
              distorted_image_tensor, resized_image_tensor, bottleneck_tensor)
 
-      elif FLAGS.twin:
-        tf.logging.info("You are attempting to use a siamese network")
+      if FLAGS.twin:
+        #tf.logging.info("You are attempting to use a siamese network")
         (train_bottlenecks_l,
          train_ground_truths_l, _) = get_random_cached_bottlenecks(
           sess, image_lists, FLAGS.train_batch_size, 'training',
@@ -1144,11 +1176,13 @@ def main(_):
           FLAGS.architecture)
         train_ground_truth = []
         for train_ground_truth_l, train_ground_truth_r in zip(train_ground_truths_l, train_ground_truths_r):
-            if tf.equal(tf.argmax(train_ground_truth_l, 1), tf.argmax(train_ground_truth_r)):
-              train_ground_truth.append(1.0)
-            else:
-              train_ground_truth.append(0.0)
-        tf.logging.info("label size {}".format(train_ground_truth.shape))
+          if np.argmax(train_ground_truth_l) == np.argmax(train_ground_truth_r):
+            train_ground_truth.append(1.0)
+          else:
+            train_ground_truth.append(0.0)
+
+        train_ground_truth = np.reshape(train_ground_truth, (-1, 1))
+        #tf.logging.info("label size {}".format(len(train_ground_truth)))
       else:
         (train_bottlenecks,
          train_ground_truth, _) = get_random_cached_bottlenecks(
@@ -1173,30 +1207,67 @@ def main(_):
       # Every so often, print out how well the graph is training.
       is_last_step = (i + 1 == FLAGS.how_many_training_steps)
       if (i % FLAGS.eval_step_interval) == 0 or is_last_step:
-        train_accuracy, cross_entropy_value = sess.run(
-            [evaluation_step, cross_entropy],
-            feed_dict={bottleneck_input: train_bottlenecks,
-                       ground_truth_input: train_ground_truth})
+        if FLAGS.twin:
+          train_accuracy, cross_entropy_value = sess.run(
+            [evaluation_step, cross_entropy], feed_dict={bottleneck_input_l: train_bottlenecks_l,
+                                      bottleneck_input_r: train_bottlenecks_r, ground_truth_input:train_ground_truth})
+        else:
+          train_accuracy, cross_entropy_value = sess.run(
+              [evaluation_step, cross_entropy],
+              feed_dict={bottleneck_input: train_bottlenecks,
+                         ground_truth_input: train_ground_truth})
+
+
         tf.logging.info('%s: Step %d: Train accuracy = %.1f%%' %
                         (datetime.now(), i, train_accuracy * 100))
         tf.logging.info('%s: Step %d: Cross entropy = %f' %
                         (datetime.now(), i, cross_entropy_value))
-        validation_bottlenecks, validation_ground_truth, _ = (
+
+        if FLAGS.twin:
+          validation_bottlenecks_l, validation_ground_truths_l, _ = (
             get_random_cached_bottlenecks(
-                sess, image_lists, FLAGS.validation_batch_size, 'validation',
-                FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
-                decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
-                FLAGS.architecture))
+              sess, image_lists, FLAGS.validation_batch_size, 'validation',
+              FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
+              decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
+              FLAGS.architecture))
+          validation_bottlenecks_r, validation_ground_truths_r, _ = (
+            get_random_cached_bottlenecks(
+              sess, image_lists, FLAGS.validation_batch_size, 'validation',
+              FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
+              decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
+              FLAGS.architecture))
+          validation_ground_truth = []
+
+          for validation_ground_truth_l, validation_ground_truth_r in zip(validation_ground_truths_l, validation_ground_truths_r):
+            if np.argmax(validation_ground_truth_l) == np.argmax(validation_ground_truth_r):
+              validation_ground_truth.append(1.0)
+            else:
+              validation_ground_truth.append(0.0)
+          validation_ground_truth = np.reshape(validation_ground_truth, (-1, 1))
+          #tf.logging.info("label size {}".format(len(validation_ground_truth)))
+        else:
+          validation_bottlenecks, validation_ground_truth, _ = (
+              get_random_cached_bottlenecks(
+                  sess, image_lists, FLAGS.validation_batch_size, 'validation',
+                  FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
+                  decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
+                  FLAGS.architecture))
         # Run a validation step and capture training summaries for TensorBoard
         # with the `merged` op.
-        validation_summary, validation_accuracy = sess.run(
+        if FLAGS.twin:
+          validation_summary, validation_accuracy = sess.run(
             [merged, evaluation_step],
-            feed_dict={bottleneck_input: validation_bottlenecks,
+            feed_dict={bottleneck_input_l: validation_bottlenecks_l, bottleneck_input_r: validation_bottlenecks_r,
                        ground_truth_input: validation_ground_truth})
+        else:
+          validation_summary, validation_accuracy = sess.run(
+              [merged, evaluation_step],
+              feed_dict={bottleneck_input: validation_bottlenecks,
+                         ground_truth_input: validation_ground_truth})
         validation_writer.add_summary(validation_summary, i)
         tf.logging.info('%s: Step %d: Validation accuracy = %.1f%% (N=%d)' %
                         (datetime.now(), i, validation_accuracy * 100,
-                         len(validation_bottlenecks)))
+                         FLAGS.validation_batch_size))
 
       # Store intermediate results
       intermediate_frequency = FLAGS.intermediate_store_frequency
@@ -1211,18 +1282,49 @@ def main(_):
 
     # We've completed all our training, so run a final test evaluation on
     # some new images we haven't used before.
-    test_bottlenecks, test_ground_truth, test_filenames = (
+    if FLAGS.twin:
+      test_bottlenecks_l, test_ground_truths_l, test_filenames_l = (
         get_random_cached_bottlenecks(
-            sess, image_lists, FLAGS.test_batch_size, 'testing',
-            FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
-            decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
-            FLAGS.architecture))
-    test_accuracy, predictions = sess.run(
+          sess, image_lists, FLAGS.test_batch_size, 'testing',
+          FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
+          decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
+          FLAGS.architecture))
+      test_bottlenecks_r, test_ground_truths_r, test_filenames_r = (
+        get_random_cached_bottlenecks(
+          sess, image_lists, FLAGS.test_batch_size, 'testing',
+          FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
+          decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
+          FLAGS.architecture))
+      test_ground_truth = []
+      for test_ground_truth_l, test_ground_truth_r in zip(test_ground_truths_l, test_ground_truths_r):
+        if np.argmax(test_ground_truth_l) == np.argmax(test_ground_truth_r):
+          test_ground_truth.append(1.0)
+        else:
+          test_ground_truth.append(0.0)
+      test_ground_truth = np.reshape(test_ground_truth, (-1, 1))
+      #tf.logging.info("label size {}".format(len(test_ground_truth)))
+    else:
+      test_bottlenecks, test_ground_truth, test_filenames = (
+          get_random_cached_bottlenecks(
+              sess, image_lists, FLAGS.test_batch_size, 'testing',
+              FLAGS.bottleneck_dir, FLAGS.image_dir, FLAGS.image_dir_test, jpeg_data_tensor,
+              decoded_image_tensor, resized_image_tensor, bottleneck_tensor,
+              FLAGS.architecture))
+
+    if FLAGS.twin:
+      test_accuracy, predictions = sess.run(
         [evaluation_step, prediction],
-        feed_dict={bottleneck_input: test_bottlenecks,
+        feed_dict={bottleneck_input_l: test_bottlenecks_l, bottleneck_input_r: test_bottlenecks_r,
                    ground_truth_input: test_ground_truth})
-    tf.logging.info('Final test accuracy = %.1f%% (N=%d)' %
-                    (test_accuracy * 100, len(test_bottlenecks)))
+      tf.logging.info('Final test accuracy = %.1f%% (N=%d)' %
+                     (test_accuracy * 100, len(test_bottlenecks_l)))
+    else:
+      test_accuracy, predictions = sess.run(
+          [evaluation_step, prediction],
+          feed_dict={bottleneck_input: test_bottlenecks,
+                     ground_truth_input: test_ground_truth})
+      tf.logging.info('Final test accuracy = %.1f%% (N=%d)' %
+                      (test_accuracy * 100, len(test_bottlenecks)))
 
     if FLAGS.print_misclassified_test_images:
       tf.logging.info('=== MISCLASSIFIED TEST IMAGES ===')
@@ -1234,8 +1336,8 @@ def main(_):
 
     # Write out the trained graph and labels with the weights stored as
     # constants.
-    save_graph_to_file(sess, graph, FLAGS.output_graph + '{lr}_{ep}_output_graph.pb'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps))
-    with gfile.FastGFile(FLAGS.output_labels + '{lr}_{ep}_output_labels.txt'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps), 'w') as f:
+    save_graph_to_file(sess, graph, FLAGS.output_graph + 'twin_{lr}_{ep}_output_graph.pb'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps))
+    with gfile.FastGFile(FLAGS.output_labels + 'twin_{lr}_{ep}_output_labels.txt'.format(lr=FLAGS.learning_rate, ep=FLAGS.how_many_training_steps), 'w') as f:
       f.write('\n'.join(image_lists.keys()) + '\n')
 
 
@@ -1354,7 +1456,7 @@ if __name__ == '__main__':
   )
   parser.add_argument(
       '--print_misclassified_test_images',
-      default=True,
+      default=False,
       help="""\
       Whether to print out a list of all misclassified test images.\
       """,
