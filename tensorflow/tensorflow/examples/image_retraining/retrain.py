@@ -768,15 +768,16 @@ def variable_summaries(var):
     tf.summary.scalar('stddev', stddev)
     tf.summary.scalar('max', tf.reduce_max(var))
     tf.summary.scalar('min', tf.reduce_min(var))
-    tf.summary.histogram('histogram', var)
+    #tf.summary.histogram('histogram', var)
 
 
-def contrastive_loss(model1, model2, label, margin):
-	with tf.name_scope("contrastive-loss"):
-	  d = tf.sqrt(tf.reduce_sum(tf.pow(model1-model2, 2), 1, keep_dims=True))
-	  tmp= label * tf.square(d)
-	  tmp2 = (1 - label) * tf.square(tf.maximum((margin - d),0))
-	  return tf.reduce_mean(tmp + tmp2) /2
+def contrastive_loss(ground, logit, margin):
+  with tf.name_scope("contrastive-loss"):
+    d = tf.square(ground-logit)
+    tmp = tf.square((1-ground))
+    #tmp2 = (1 - ground) * tf.square(tf.maximum((margin - d), 0))
+    return tf.reduce_mean(tmp + d)
+
 
 def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
                            bottleneck_tensor_size):
@@ -811,16 +812,18 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
           bottleneck_tensor,
           shape=[None, bottleneck_tensor_size],
           name='BottleneckInputPlaceholder')
-      class_count = 1
+      ground_truth_input = tf.placeholder(tf.float32,
+                                          [None, 1],
+                                          name='GroundTruthInput')
     else:
       bottleneck_input = tf.placeholder_with_default(
           bottleneck_tensor,
           shape=[None, bottleneck_tensor_size],
           name='BottleneckInputPlaceholder')
 
-    ground_truth_input = tf.placeholder(tf.float32,
-                                        [None, class_count],
-                                        name='GroundTruthInput')
+      ground_truth_input = tf.placeholder(tf.float32,
+                                          [None, class_count],
+                                          name='GroundTruthInput')
 
   # Organizing the following ops as `final_training_ops` so they're easier
   # to see in TensorBoard
@@ -849,36 +852,34 @@ def add_final_training_ops(class_count, final_tensor_name, bottleneck_tensor,
         logits = tf.concat([logits_left, logits_right], 1)
       else:
         logits = tf.matmul(bottleneck_input, layer_weights) + layer_biases
-      tf.summary.histogram('pre_activations', logits)
+      #tf.summary.histogram('pre_activations', logits)
   #2 fully connected layers go before the softmax
   if FLAGS.twin:
+
     logits = tf.layers.dense(
             inputs=logits,
-            units=class_count,
+            units=99,
             kernel_initializer=tf.random_uniform_initializer(-0.05, 0.05),
             kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=1e-4),
             activation=tf.nn.relu)
+    logits = tf.contrib.layers.flatten(logits)
     logits = tf.layers.dense(
             inputs=logits,
-            units=class_count,
+            units=1,
             kernel_initializer=tf.random_uniform_initializer(-0.05, 0.05),
             kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=1e-4),
             activation=None)
-    logits = tf.reduce_mean(logits, 1)
-    logits = tf.reshape(logits, [-1, 1])
   final_tensor = tf.nn.softmax(logits, name=final_tensor_name)
-  tf.summary.histogram('activations', final_tensor)
+  #tf.summary.histogram('activations', final_tensor)
 
   with tf.name_scope('cross_entropy'):
-    if FLAGS.twin:
-      tmp = ground_truth_input * tf.square(logits)
-      tmp2 = (1 - ground_truth_input) * tf.square(tf.maximum((1 - logits), 0))
-      cross_entropy = tf.reduce_sum(tmp + tmp2) / FLAGS.train_batch_size / 2
-    else:
-      cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
+    cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
           labels=ground_truth_input, logits=logits)
     with tf.name_scope('total'):
-      cross_entropy_mean = tf.reduce_mean(cross_entropy)
+      if FLAGS.twin:
+        cross_entropy_mean = contrastive_loss(ground_truth_input, logits, 0.2)
+      else:
+        cross_entropy_mean = tf.reduce_mean(cross_entropy)
   tf.summary.scalar('cross_entropy', cross_entropy_mean)
 
   with tf.name_scope('train'):
@@ -907,7 +908,7 @@ def add_evaluation_step(result_tensor, ground_truth_tensor):
   with tf.name_scope('accuracy'):
     with tf.name_scope('correct_prediction'):
       if FLAGS.twin:
-        prediction = result_tensor#tf.reduce_mean(result_tensor, 1)#tf.metrics.mean(result_tensor[0], result_tensor[1])
+        prediction = result_tensor
         correct_prediction = tf.equal(prediction, ground_truth_tensor)
       else:
         prediction = tf.argmax(result_tensor, 1)
@@ -1182,7 +1183,6 @@ def main(_):
             train_ground_truth.append(0.0)
 
         train_ground_truth = np.reshape(train_ground_truth, (-1, 1))
-        #tf.logging.info("label size {}".format(len(train_ground_truth)))
       else:
         (train_bottlenecks,
          train_ground_truth, _) = get_random_cached_bottlenecks(
@@ -1427,7 +1427,7 @@ if __name__ == '__main__':
   parser.add_argument(
       '--train_batch_size',
       type=int,
-      default=100,
+      default=50,
       help='How many images to train on at a time.'
   )
   parser.add_argument(
