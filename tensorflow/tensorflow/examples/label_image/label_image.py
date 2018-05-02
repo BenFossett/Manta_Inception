@@ -34,6 +34,7 @@ gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.90)
 
 
 def load_graph(model_file):
+    tf.logging.info("Got here with {}".format(model_file))
     graph = tf.Graph()
     graph_def = tf.GraphDef()
 
@@ -103,6 +104,7 @@ if __name__ == "__main__":
                         default='/mnt/storage/home/tc13007/Manta_Inception/tensorflow/retrain_logs',
                         help='Where to save summary logs for TensorBoard.'
                         )
+    parser.add_argument("--twin", type=bool)
     args = parser.parse_args()
 
     if args.graph:
@@ -137,7 +139,9 @@ if __name__ == "__main__":
     if args.top_k_graph and not args.vote:
         folder_name = "/mnt/storage/scratch/tc13007/mantas_test"
 
+    tf.logging.info(model_file)
     graph = load_graph(model_file)
+    tf.logging.info(graph)
     input_name = "import/" + input_layer
     output_name = "import/" + output_layer
     input_operation = graph.get_operation_by_name(input_name)
@@ -337,6 +341,8 @@ if __name__ == "__main__":
                                         input_width=input_width,
                                         input_mean=input_mean,
                                         input_std=input_std)
+
+        tf.logging.info(input_operation)
 
         with tf.Session(graph=graph) as sess:
             results = sess.run(output_operation.outputs[0],
