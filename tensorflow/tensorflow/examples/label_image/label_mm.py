@@ -38,7 +38,7 @@ if __name__ == "__main__":
     parser.add_argument("--graph", type=bool)
     parser.add_argument('--summaries_dir',
                         type=str,
-                        default='/mnt/storage/home/tc13007/Manta_Inception/tensorflow/retrain_logs',
+                        default='/mnt/storage/home/bf15007/Manta_Inception/tensorflow/retrain_logs',
                         help='Where to save summary logs for TensorBoard.'
                         )
     args = parser.parse_args()

@@ -101,7 +101,7 @@ if __name__ == "__main__":
     parser.add_argument("--histogram", type=bool, help="produce prediction histogram")
     parser.add_argument('--summaries_dir',
                         type=str,
-                        default='/mnt/storage/home/tc13007/Manta_Inception/tensorflow/retrain_logs',
+                        default='/mnt/storage/home/bf15007/Manta_Inception/tensorflow/retrain_logs',
                         help='Where to save summary logs for TensorBoard.'
                         )
     parser.add_argument("--twin", type=bool)
@@ -110,14 +110,14 @@ if __name__ == "__main__":
     if args.graph:
         model_file = args.graph
     if args.vote:
-        folder_name = "/mnt/storage/scratch/tc13007/mantas_test_augmented"
+        folder_name = "/mnt/storage/scratch/bf15007/mantas_test_augmented"
     if args.image:
         if args.vote:
             file_name = folder_name + "/" + args.image
         else:
             file_name = args.image
     if args.dive_vote:
-        folder_name = "/mnt/storage/scratch/tc13007/mantas_test"
+        folder_name = "/mnt/storage/scratch/bf15007/mantas_test"
         if args.top_k_graph:
             file_name = folder_name
         else:
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     if args.output_layer:
         output_layer = args.output_layer
     if args.top_k_graph and not args.vote:
-        folder_name = "/mnt/storage/scratch/tc13007/mantas_test"
+        folder_name = "/mnt/storage/scratch/bf15007/mantas_test"
 
     tf.logging.info(model_file)
     graph = load_graph(model_file)

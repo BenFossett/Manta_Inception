@@ -299,7 +299,7 @@ def create_model_graph(model_info):
   """
   with tf.Graph().as_default() as graph:
     if FLAGS.twin:
-        model_path = os.path.join('/mnt/storage/scratch/tc13007/logs', model_info['model_file_name'])
+        model_path = os.path.join('/mnt/storage/scratch/bf15007/logs', model_info['model_file_name'])
     else:
         model_path = os.path.join(FLAGS.model_dir, model_info['model_file_name'])
     with gfile.FastGFile(model_path, 'rb') as f:
@@ -943,7 +943,7 @@ def prepare_file_system():
 def create_model_info(architecture):
   architecture = architecture.lower()
   if FLAGS.twin:
-      data_url = '/mnt/storage/scratch/tc13007/logs/0.1_240000_output_graph.pb'
+      data_url = '/mnt/storage/scratch/bf15007/logs/0.1_240000_output_graph.pb'
       # pylint: enable=line-too-long
       bottleneck_tensor_name = 'pool_3/_reshape:0'
       bottleneck_tensor_size = 2048
@@ -1381,19 +1381,19 @@ if __name__ == '__main__':
   parser.add_argument(
     '--image_dir_test',
     type=str,
-    default='/mnt/storage/scratch/tc13007/mantas_test',
+    default='/mnt/storage/scratch/bf15007/mantas_test',
     help='Path to folders of labeled images.'
   )
   parser.add_argument(
       '--output_graph',
       type=str,
-      default='/mnt/storage/scratch/tc13007/logs/',
+      default='/mnt/storage/scratch/bf15007/logs/',
       help='Where to save the trained graph.'
   )
   parser.add_argument(
       '--intermediate_output_graphs_dir',
       type=str,
-      default='/mnt/storage/scratch/tc13007/logs/intermediate_graph/',
+      default='/mnt/storage/scratch/bf15007/logs/intermediate_graph/',
       help='Where to save the intermediate graphs.'
   )
   parser.add_argument(
@@ -1408,13 +1408,13 @@ if __name__ == '__main__':
   parser.add_argument(
       '--output_labels',
       type=str,
-      default='/mnt/storage/scratch/tc13007/logs/',
+      default='/mnt/storage/scratch/bf15007/logs/',
       help='Where to save the trained graph\'s labels.'
   )
   parser.add_argument(
       '--summaries_dir',
       type=str,
-      default='/mnt/storage/home/tc13007/Manta_Inception/tensorflow/retrain_logs',
+      default='/mnt/storage/home/bf15007/Manta_Inception/tensorflow/retrain_logs',
       help='Where to save summary logs for TensorBoard.'
   )
   parser.add_argument(
@@ -1488,7 +1488,7 @@ if __name__ == '__main__':
   parser.add_argument(
       '--model_dir',
       type=str,
-      default='/mnt/storage/scratch/tc13007/logs/imagenet',
+      default='/mnt/storage/scratch/bf15007/logs/imagenet',
       help="""\
       Path to classify_image_graph_def.pb,
       imagenet_synset_to_human_label_map.txt, and
@@ -1498,7 +1498,7 @@ if __name__ == '__main__':
   parser.add_argument(
       '--bottleneck_dir',
       type=str,
-      default='/mnt/storage/scratch/tc13007/logs/bottleneck',
+      default='/mnt/storage/scratch/bf15007/logs/bottleneck',
       help='Path to cache bottleneck layer values as files.'
   )
   parser.add_argument(
